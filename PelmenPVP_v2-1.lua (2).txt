@@ -1,0 +1,2034 @@
+-- ╔══════════════════════════════════════════╗
+-- ║   PELMEN PVP  v2.0   by Pelmen          ║
+-- ║   Spider v1 · AntiTP · AntiLag          ║
+-- ║   PC + Mobile · Delta · Arceus · Synapse║
+-- ╚══════════════════════════════════════════╝
+
+local _S={
+    kp    = type(keypress)=="function"            and keypress            or false,
+    m1c   = type(mouse1click)=="function"          and mouse1click          or false,
+    fprox = type(fireproximityprompt)=="function"  and fireproximityprompt  or false,
+    fclk  = type(fireclickdetector)=="function"    and fireclickdetector    or false,
+    wf    = type(writefile)=="function"            and writefile            or false,
+    rf    = type(readfile)=="function"             and readfile             or false,
+}
+local function sCall(f,...) if f then return pcall(f,...) end return false end
+
+if not task then
+    task={
+        wait  = function(t) return wait(t or 0) end,
+        spawn = function(f,...) return spawn(f,...) end,
+        delay = function(t,f) return delay(t,f) end,
+        defer = function(f) return spawn(f) end,
+    }
+end
+
+local _msin   = math.sin
+local _mcos   = math.cos
+local _mfloor = math.floor
+local _mclamp = math.clamp
+local _mmax   = math.max
+local _mmin   = math.min
+local _mabs   = math.abs
+local _mrad   = math.rad
+local _mhuge  = math.huge
+local _mrnd   = math.random
+
+local Players         = game:GetService("Players")
+local RunService      = game:GetService("RunService")
+local UIS             = game:GetService("UserInputService")
+local TweenService    = game:GetService("TweenService")
+local HttpService     = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+local ContextAction   = game:GetService("ContextActionService")
+local Debris          = game:GetService("Debris")
+local Camera          = workspace.CurrentCamera
+local LP              = Players.LocalPlayer
+local Mouse           = LP:GetMouse()
+local IsMobile        = UIS.TouchEnabled and not UIS.KeyboardEnabled
+
+local function GetVP()
+    local v = Camera.ViewportSize
+    return v.X, v.Y
+end
+local SW, SH = GetVP()
+
+local function S(n)
+    local vx, vy = GetVP()
+    local sc = _mmin(_mclamp(vx/1280, 0.42, 2.2), _mclamp(vy/720, 0.42, 2.2))
+    return _mfloor(n * sc)
+end
+
+Camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+    SW, SH = GetVP()
+end)
+
+-- ── CONFIG ────────────────────────────────────────────────────────────────────
+local CFG_FILE = "PelmenPVP_v2_cfg.json"
+local DEFAULT = {
+    Speed       = {On=false, Value=32},
+    InfJump     = {On=false, Power=50},
+    Fling       = {On=false, Power=300, Range=25},
+    AntiAC      = {On=false},
+    AntiRag     = {On=false},
+    ShiftLock   = {On=false},
+    Spam        = {On=false, Delay=7},
+    ServLag     = {On=false, Threads=50},
+    Fly         = {On=false, Speed=5},
+    FastCollect = {On=false, Rate=5},
+    AntiTP      = {On=false, Threshold=40},
+    AntiLag     = {On=false},
+}
+
+local function DeepCopy(t)
+    local c = {}
+    for k,v in pairs(t) do c[k] = type(v)=="table" and DeepCopy(v) or v end
+    return c
+end
+
+local function MergeCfg(base, saved)
+    if type(saved)~="table" then return DeepCopy(base) end
+    local m = DeepCopy(base)
+    for k,v in pairs(saved) do
+        if type(v)=="table" and type(m[k])=="table" then
+            for kk,vv in pairs(v) do if m[k][kk]~=nil then m[k][kk]=vv end end
+        end
+    end
+    return m
+end
+
+local function LoadCfg()
+    if _S.rf then
+        local ok,raw = sCall(_S.rf, CFG_FILE)
+        if ok and raw and #raw>2 then
+            local ok2,p = pcall(HttpService.JSONDecode, HttpService, raw)
+            if ok2 and p then return MergeCfg(DEFAULT,p) end
+        end
+    end
+    return DeepCopy(DEFAULT)
+end
+
+local function SaveCfg(cfg)
+    if _S.wf then
+        local ok,json = pcall(HttpService.JSONEncode, HttpService, cfg)
+        if ok then sCall(_S.wf, CFG_FILE, json) end
+    end
+end
+
+local Cfg   = LoadCfg()
+local _saveT = 0
+local function ScheduleSave() _saveT = tick() end
+
+local function Char()  return LP.Character end
+local function Root()  local c=Char() return c and c:FindFirstChild("HumanoidRootPart") end
+local function Hum()   local c=Char() return c and c:FindFirstChildOfClass("Humanoid") end
+
+-- ── THEME ─────────────────────────────────────────────────────────────────────
+local T = {
+    BG      = Color3.fromRGB(8,8,14),
+    Panel   = Color3.fromRGB(14,14,24),
+    Card    = Color3.fromRGB(20,20,34),
+    CardHov = Color3.fromRGB(28,28,46),
+    Border  = Color3.fromRGB(38,38,62),
+    Acc     = Color3.fromRGB(100,70,255),
+    Acc2    = Color3.fromRGB(170,110,255),
+    On      = Color3.fromRGB(110,80,255),
+    Pill    = Color3.fromRGB(26,26,44),
+    Text    = Color3.fromRGB(208,208,228),
+    Sub     = Color3.fromRGB(88,88,118),
+    White   = Color3.fromRGB(255,255,255),
+    Green   = Color3.fromRGB(70,215,110),
+    Red     = Color3.fromRGB(220,65,65),
+    Yellow  = Color3.fromRGB(235,195,55),
+}
+
+-- ── SHIMMER (black-white) ─────────────────────────────────────────────────────
+local _shimmers = {}
+
+local function shimCol(t, shift)
+    local v = 0.5 + 0.5 * _msin(t * 1.35 + shift * 6.2832)
+    local lv = 0.16 + 0.80 * v
+    return Color3.new(lv, lv, lv)
+end
+
+local function addShimmer(obj, shift)
+    table.insert(_shimmers, {obj=obj, shift=shift or 0})
+end
+
+local function addShimmerGrad(grad, shift)
+    table.insert(_shimmers, {grad=grad, shift=shift or 0})
+end
+
+-- ── UI HELPERS ────────────────────────────────────────────────────────────────
+local function Tw(o, p, t, s)
+    TweenService:Create(o, TweenInfo.new(t or 0.18, s or Enum.EasingStyle.Quart, Enum.EasingDirection.Out), p):Play()
+end
+
+local function mkCorner(p, r)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, r or 12)
+    c.Parent = p
+    return c
+end
+
+local function mkStroke(p, col, th)
+    local s = Instance.new("UIStroke")
+    s.Color = col s.Thickness = th or 1.4
+    s.Parent = p
+    return s
+end
+
+local function mkPad(p, l, r, t, b)
+    local u = Instance.new("UIPadding")
+    u.PaddingLeft   = UDim.new(0, l or 0)
+    u.PaddingRight  = UDim.new(0, r or 0)
+    u.PaddingTop    = UDim.new(0, t or 0)
+    u.PaddingBottom = UDim.new(0, b or 0)
+    u.Parent = p
+end
+
+-- ── GUI ROOT ──────────────────────────────────────────────────────────────────
+if game.CoreGui:FindFirstChild("PelmenPVP2") then
+    game.CoreGui.PelmenPVP2:Destroy()
+end
+local GUI = Instance.new("ScreenGui")
+GUI.Name = "PelmenPVP2"
+GUI.ResetOnSpawn = false
+GUI.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+GUI.DisplayOrder = 1000
+GUI.IgnoreGuiInset = true
+local _gok = pcall(function() GUI.Parent = game.CoreGui end)
+if not _gok then GUI.Parent = LP.PlayerGui end
+
+-- ── NOTIFICATIONS ─────────────────────────────────────────────────────────────
+local _nStack = 0
+local _nMax   = 5
+
+local function Notify(title, msg, col, dur)
+    if _nStack >= _nMax then return end
+    _nStack = _nStack + 1
+    dur = dur or 3
+    col = col or T.Acc
+    local slot = _nStack
+    local NW, NH = S(290), S(64)
+    local N = Instance.new("Frame", GUI)
+    N.Size = UDim2.new(0, NW, 0, NH)
+    N.Position = UDim2.new(1, 24, 1, -(NH + S(12)) * slot - S(10))
+    N.BackgroundColor3 = T.Panel
+    N.BorderSizePixel = 0
+    N.ZIndex = 200
+    mkCorner(N, S(18))
+    local ns = mkStroke(N, col, 1.5)
+    addShimmer(ns, _mrnd() * 0.5)
+
+    local Bar = Instance.new("Frame", N)
+    Bar.Size = UDim2.new(0, S(4), 0.65, 0)
+    Bar.Position = UDim2.new(0, 0, 0.175, 0)
+    Bar.BackgroundColor3 = col
+    Bar.BorderSizePixel = 0
+    mkCorner(Bar, S(4))
+
+    local TL = Instance.new("TextLabel", N)
+    TL.Text = title
+    TL.Size = UDim2.new(1, -S(18), 0, S(22))
+    TL.Position = UDim2.new(0, S(14), 0, S(8))
+    TL.BackgroundTransparency = 1
+    TL.TextColor3 = T.White
+    TL.Font = Enum.Font.GothamBold
+    TL.TextSize = S(12)
+    TL.TextXAlignment = Enum.TextXAlignment.Left
+    TL.ZIndex = 201
+
+    local ML = Instance.new("TextLabel", N)
+    ML.Text = msg
+    ML.Size = UDim2.new(1, -S(18), 0, S(16))
+    ML.Position = UDim2.new(0, S(14), 0, S(34))
+    ML.BackgroundTransparency = 1
+    ML.TextColor3 = T.Sub
+    ML.Font = Enum.Font.Gotham
+    ML.TextSize = S(10)
+    ML.TextXAlignment = Enum.TextXAlignment.Left
+    ML.ZIndex = 201
+
+    Tw(N, {Position = UDim2.new(1, -NW-S(14), 1, -(NH+S(12))*slot-S(10))}, 0.36, Enum.EasingStyle.Back)
+
+    task.delay(dur, function()
+        Tw(N, {Position = UDim2.new(1, 24, 1, -(NH+S(12))*slot-S(10))}, 0.26)
+        task.wait(0.3)
+        if N and N.Parent then N:Destroy() end
+        _nStack = _mmax(0, _nStack-1)
+    end)
+end
+
+-- ── ANTI-AC STORAGE ───────────────────────────────────────────────────────────
+local _acConns = {}
+local _acMeta  = {}
+
+local function StopAntiAC()
+    for _,c in pairs(_acConns) do pcall(function() c:Disconnect() end) end
+    _acConns = {}
+    for obj, mt in pairs(_acMeta) do pcall(function() setmetatable(obj, mt) end) end
+    _acMeta = {}
+end
+
+-- ── ANTI-TP ───────────────────────────────────────────────────────────────────
+local _atpConn   = nil
+local _lastSafeP = nil
+
+local function StopAntiTP()
+    if _atpConn then pcall(function() _atpConn:Disconnect() end) end
+    _atpConn = nil
+    _lastSafeP = nil
+end
+
+local function StartAntiTP()
+    StopAntiTP()
+    _atpConn = RunService.Heartbeat:Connect(function()
+        if not Cfg.AntiTP.On then return end
+        local r = Root()
+        if not r then _lastSafeP = nil return end
+        local cf = r.CFrame
+        if _lastSafeP then
+            local dist = (cf.Position - _lastSafeP.Position).Magnitude
+            if dist > Cfg.AntiTP.Threshold and not _flyActive then
+                pcall(function() r.CFrame = _lastSafeP end)
+                Notify("🚫 Anti-TP", "Rollback blocked! ("..tostring(_mfloor(dist)).."st)", T.Red, 2)
+                return
+            end
+        end
+        _lastSafeP = cf
+    end)
+end
+
+-- ── ANTI-LAG ──────────────────────────────────────────────────────────────────
+local _alagConns   = {}
+local _alagRunning = false
+
+local function StopAntiLag()
+    for _,c in pairs(_alagConns) do pcall(function() c:Disconnect() end) end
+    _alagConns = {}
+    _alagRunning = false
+end
+
+local function StartAntiLag()
+    StopAntiLag()
+    _alagRunning = true
+    task.spawn(function()
+        local tracked = {}
+        while _alagRunning and Cfg.AntiLag.On do
+            pcall(function()
+                for _,v in pairs(game:GetDescendants()) do
+                    if v:IsA("RemoteEvent") and not tracked[v] then
+                        tracked[v] = true
+                        local calls, last = 0, tick()
+                        local conn
+                        conn = v.OnClientEvent:Connect(function()
+                            if not (_alagRunning and Cfg.AntiLag.On) then
+                                pcall(function() conn:Disconnect() end)
+                                tracked[v] = nil return
+                            end
+                            local now = tick()
+                            if now - last > 1 then calls = 0 last = now end
+                            calls = calls + 1
+                            if calls > 30 then
+                                pcall(function() conn:Disconnect() end)
+                                tracked[v] = nil
+                                Notify("🧹 Anti-Lag", "Spam blocked: "..v.Name, T.Yellow, 1.5)
+                            end
+                        end)
+                        table.insert(_alagConns, conn)
+                    end
+                end
+            end)
+            task.wait(2)
+        end
+    end)
+    task.spawn(function()
+        while _alagRunning and Cfg.AntiLag.On do
+            pcall(function()
+                for _,v in pairs(game:GetDescendants()) do
+                    if (v:IsA("LocalScript") or v:IsA("ModuleScript")) then
+                        local n = v.Name:lower()
+                        if n:find("lag") or n:find("flood") or n:find("spam") or n:find("ddos") then
+                            pcall(function() v.Disabled = true end)
+                        end
+                    end
+                end
+            end)
+            task.wait(3)
+        end
+    end)
+    task.spawn(function()
+        local bec = {}
+        while _alagRunning and Cfg.AntiLag.On do
+            pcall(function()
+                for _,v in pairs(game:GetDescendants()) do
+                    if v:IsA("BindableEvent") and not bec[v] then
+                        bec[v] = 0
+                        local last = tick()
+                        local conn
+                        conn = v.Event:Connect(function()
+                            if not (_alagRunning and Cfg.AntiLag.On) then
+                                pcall(function() conn:Disconnect() end)
+                                bec[v] = nil return
+                            end
+                            local now = tick()
+                            if now - last > 1 then bec[v] = 0 last = now end
+                            bec[v] = (bec[v] or 0) + 1
+                            if bec[v] > 50 then
+                                pcall(function() conn:Disconnect() end)
+                                bec[v] = nil
+                            end
+                        end)
+                        table.insert(_alagConns, conn)
+                    end
+                end
+            end)
+            task.wait(3)
+        end
+    end)
+    Notify("🧹 Anti-Lag", "3 слоя активны", T.Yellow, 3)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- SPIDER v1 — AI Anti-Cheat Engine
+-- ═══════════════════════════════════════════════════════════════════════════════
+local SPIDER = {
+    BLOCK_THR    = 60,
+    WARN_THR     = 35,
+    LEARN_WINDOW = 8,
+    WL_CALLS     = 12,
+    SCORE_DECAY  = 2.5,
+    MAX_SCORE    = 100,
+    scores       = {},
+    learnStart   = 0,
+    learning     = true,
+    blocked      = 0,
+    warned       = 0,
+    log          = {},
+}
+
+local _KW = {
+    anticheat=25, anti_cheat=25, antihack=22, anti_hack=22,
+    banned=20, banning=20, kick=18, kicked=18,
+    detection=18, detected=16, cheatdetect=22,
+    detect=12, cheat=12, hack=10, exploit=10,
+    ban=10, flag=10, flagged=10,
+    verify=8, report=8, sanity=8,
+    speedcheck=14, walkcheck=14, poscheck=12, jumpcheck=12,
+    teleportcheck=12, healthcheck=10,
+    monitor=5, watchdog=6, guardian=5, sentinel=5,
+    enforce=5, inspector=5, oversight=4,
+}
+
+local function SP_ScoreName(name)
+    if not name then return 0 end
+    local n = tostring(name):lower():gsub("[%s_%-%.]","")
+    local tot = 0
+    for kw, w in pairs(_KW) do
+        if n:find(kw, 1, true) then tot = tot + w end
+    end
+    return _mmin(tot, 60)
+end
+
+local function SP_GetRec(obj)
+    local id = tostring(obj)
+    if not SPIDER.scores[id] then
+        local ns = 0
+        pcall(function()
+            ns = SP_ScoreName(obj.Name)
+            ns = ns + SP_ScoreName(obj.Parent and obj.Parent.Name or "") * 0.5
+        end)
+        SPIDER.scores[id] = {
+            score=ns, baseScore=ns,
+            lastSeen=tick(), firstSeen=tick(),
+            calls=0, whitelist=false,
+            name=tostring(pcall(function() return obj.Name end) and obj.Name or "?"),
+        }
+    end
+    return SPIDER.scores[id]
+end
+
+local _lastDecay = 0
+local function SP_Decay()
+    local now = tick()
+    local dt = now - _lastDecay
+    if dt < 0.5 then return end
+    _lastDecay = now
+    for id, rec in pairs(SPIDER.scores) do
+        if not rec.whitelist then
+            rec.score = _mmax(rec.baseScore, rec.score - SPIDER.SCORE_DECAY * dt)
+        end
+        if now - rec.lastSeen > 120 then SPIDER.scores[id] = nil end
+    end
+end
+
+local function SP_Log(icon, name, score, action)
+    table.insert(SPIDER.log, 1, {icon=icon, name=name, score=_mfloor(score), action=action, t=tick()})
+    if #SPIDER.log > 20 then table.remove(SPIDER.log) end
+end
+
+local function SP_Eval(obj, extra)
+    local rec = SP_GetRec(obj)
+    rec.calls = rec.calls + 1
+    rec.lastSeen = tick()
+    if SPIDER.learning then
+        if rec.calls >= SPIDER.WL_CALLS then rec.whitelist = true end
+        return "allow"
+    end
+    if rec.whitelist then return "allow" end
+    rec.score = _mmin(SPIDER.MAX_SCORE, rec.score + (extra or 0))
+    local age = _mmax(0.1, rec.lastSeen - rec.firstSeen)
+    local cps = rec.calls / age
+    if cps > 15 then rec.score = _mmin(SPIDER.MAX_SCORE, rec.score + 8) end
+    if cps > 30 then rec.score = _mmin(SPIDER.MAX_SCORE, rec.score + 12) end
+    local s = rec.score
+    if s >= SPIDER.BLOCK_THR then
+        SPIDER.blocked = SPIDER.blocked + 1
+        SP_Log("🚫", rec.name, s, "BLOCK")
+        return "block"
+    elseif s >= SPIDER.WARN_THR then
+        SPIDER.warned = SPIDER.warned + 1
+        SP_Log("⚠️", rec.name, s, "WARN")
+        return "warn"
+    end
+    return "allow"
+end
+
+local function SP_EvalName(name, extra)
+    if SPIDER.learning then return "allow" end
+    local s = SP_ScoreName(name) + (extra or 0)
+    if s >= SPIDER.BLOCK_THR then
+        SPIDER.blocked = SPIDER.blocked + 1
+        SP_Log("🚫", name, s, "BLOCK")
+        return "block"
+    elseif s >= SPIDER.WARN_THR then
+        SPIDER.warned = SPIDER.warned + 1
+        SP_Log("⚠️", name, s, "WARN")
+        return "warn"
+    end
+    return "allow"
+end
+
+local function SP_KillConns(obj)
+    if not (getconnections and obj) then return 0 end
+    local killed = 0
+    for _, sig in ipairs({"Touched","TouchEnded","ChildAdded","ChildRemoved",
+                           "DescendantAdded","AncestryChanged","AttributeChanged"}) do
+        pcall(function()
+            local ev = obj[sig]
+            if ev then
+                for _, c in pairs(getconnections(ev)) do
+                    if c and c.Connected then
+                        pcall(function() c:Disable() end)
+                        pcall(function() c:Disconnect() end)
+                        killed = killed + 1
+                    end
+                end
+            end
+        end)
+    end
+    return killed
+end
+
+local function SP_KillTouched(char)
+    if not char then return 0 end
+    local t = 0
+    for _, p in pairs(char:GetDescendants()) do
+        if p:IsA("BasePart") then t = t + SP_KillConns(p) end
+    end
+    return t
+end
+
+local function SP_KillScripts()
+    local k = 0
+    for _, src in ipairs({game:GetService("ReplicatedStorage"), game:GetService("StarterGui"),
+                           game:GetService("StarterPlayer"), Char()}) do
+        if src then pcall(function()
+            for _, scr in pairs(src:GetDescendants()) do
+                if scr:IsA("LocalScript") or scr:IsA("Script") or scr:IsA("ModuleScript") then
+                    if SP_EvalName(scr.Name) == "block" then
+                        pcall(function() scr.Disabled = true end)
+                        pcall(function()
+                            local mt = getrawmetatable and getrawmetatable(scr)
+                            if mt then
+                                if setreadonly then setreadonly(mt,false) end
+                                rawset(scr,"Disabled",true)
+                                if setreadonly then setreadonly(mt,true) end
+                            end
+                        end)
+                        k = k + 1
+                    end
+                end
+            end
+        end) end
+    end
+    return k
+end
+
+local function SP_CleanChar(char)
+    if not char then return end
+    for _, v in pairs(char:GetDescendants()) do
+        if v:IsA("BallSocketConstraint") or v:IsA("HingeConstraint") then
+            pcall(function() v.Enabled = false end)
+        end
+        if (v:IsA("Script") or v:IsA("LocalScript")) and SP_EvalName(v.Name) == "block" then
+            pcall(function() v.Disabled = true end)
+        end
+        if v:IsA("ClickDetector") and SP_EvalName(v.Parent and v.Parent.Name or "") == "block" then
+            pcall(function() v.MaxActivationDistance = 0 end)
+        end
+    end
+end
+
+local _ncHooked = false
+local function SP_HookMeta()
+    if _ncHooked then return end
+    _ncHooked = true
+    pcall(function()
+        local mt = getrawmetatable and getrawmetatable(game)
+        if not mt then return end
+        local oldNC = rawget(mt,"__namecall")
+        if setreadonly then setreadonly(mt, false) end
+        local function _nc(self, ...)
+            local method = (getnamecallmethod and getnamecallmethod()) or ""
+            if method == "Kick" and (self == LP or self == Players.LocalPlayer) then
+                SPIDER.blocked = SPIDER.blocked + 1
+                SP_Log("🚫","Kick",100,"BLOCK")
+                Notify("🕷️ KICK","Blocked by Spider v1",T.Red,5)
+                return
+            end
+            if (method=="Ban" or method=="Remove" or method=="Destroy") and self == LP then
+                SPIDER.blocked = SPIDER.blocked + 1
+                SP_Log("🚫",method,100,"BLOCK")
+                Notify("🕷️ "..method,"Blocked by Spider v1",T.Red,4)
+                return
+            end
+            if method == "FireServer" or method == "InvokeServer" then
+                local ok, isRE = pcall(function()
+                    return self:IsA("RemoteEvent") or self:IsA("RemoteFunction")
+                end)
+                if ok and isRE then
+                    local dec = SP_Eval(self, 5)
+                    if dec == "block" then return end
+                    if dec == "warn" then
+                        local n = "?" pcall(function() n = self.Name end)
+                        Notify("🕷️ Warn", "Suspicious: "..n, T.Yellow, 2)
+                    end
+                end
+            end
+            if (method=="TeleportToPlaceInstance" or method=="TeleportAsync"
+                or method=="TeleportToPrivateServer") and not _flyActive then
+                local dec = SP_EvalName(method, 20)
+                if dec == "block" then
+                    Notify("🕷️ TP","Server TP blocked",T.Red,3)
+                    return
+                end
+            end
+            return oldNC(self, ...)
+        end
+        mt.__namecall = newcclosure and newcclosure(_nc) or _nc
+        if setreadonly then setreadonly(mt, true) end
+    end)
+end
+
+local function SP_HookHumanoid(h)
+    if not (h and getrawmetatable) then return end
+    pcall(function()
+        local orig = getrawmetatable(h)
+        if not orig then return end
+        _acMeta[h] = orig
+        local oldNI = rawget(orig,"__newindex")
+        if setreadonly then setreadonly(orig, false) end
+        local function _ni(self, key, val)
+            if Cfg.AntiAC.On then
+                if key == "WalkSpeed"    then val = Cfg.Speed.On and Cfg.Speed.Value or 16 end
+                if key == "JumpPower"    then val = Cfg.InfJump.On and Cfg.InfJump.Power or 50 end
+                if key == "MaxHealth" and val < 1 then return end
+                if key == "PlatformStand" and val == true then return end
+                if key == "Sit"           and val == true then return end
+                if key == "JumpEnabled"   and val == false then return end
+            end
+            return oldNI and oldNI(self,key,val) or rawset(self,key,val)
+        end
+        orig.__newindex = newcclosure and newcclosure(_ni) or _ni
+        if setreadonly then setreadonly(orig, true) end
+    end)
+end
+
+local _origGrav = nil
+local function SP_HookGravity()
+    _origGrav = workspace.Gravity
+    workspace:GetPropertyChangedSignal("Gravity"):Connect(function()
+        if Cfg.AntiAC.On and workspace.Gravity ~= _origGrav then
+            pcall(function() workspace.Gravity = _origGrav end)
+            Notify("🕷️ Gravity","Gravity change blocked!",T.Red,3)
+        end
+    end)
+end
+
+local function StartAntiAC(h)
+    StopAntiAC()
+    if not h then return end
+    SPIDER.scores     = {}
+    SPIDER.learnStart = tick()
+    SPIDER.learning   = true
+    SPIDER.blocked    = 0
+    SPIDER.warned     = 0
+    SPIDER.log        = {}
+    _lastDecay        = tick()
+
+    SP_HookMeta()
+    SP_HookHumanoid(h)
+    SP_HookGravity()
+
+    local function forceWS()
+        if not Cfg.AntiAC.On then return end
+        local want = Cfg.Speed.On and Cfg.Speed.Value or 16
+        if h and h.Parent and h.WalkSpeed ~= want then
+            for _ = 1,6 do pcall(function() h.WalkSpeed = want end) end
+        end
+    end
+    local function forceJP()
+        if not Cfg.AntiAC.On then return end
+        local want = Cfg.InfJump.On and Cfg.InfJump.Power or 50
+        if h and h.Parent and h.JumpPower ~= want then
+            for _ = 1,6 do pcall(function() h.JumpPower = want end) end
+        end
+    end
+    local function forceHP()
+        if not Cfg.AntiAC.On then return end
+        if h and h.Parent and h.Health <= 0 then
+            pcall(function() h.Health = h.MaxHealth end)
+        end
+    end
+
+    local c1 = h:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+        task.defer(forceWS) task.delay(0.01,forceWS) task.delay(0.05,forceWS) task.delay(0.12,forceWS)
+    end)
+    table.insert(_acConns, c1)
+    local c2 = h:GetPropertyChangedSignal("JumpPower"):Connect(function()
+        task.defer(forceJP) task.delay(0.01,forceJP) task.delay(0.05,forceJP) task.delay(0.12,forceJP)
+    end)
+    table.insert(_acConns, c2)
+    local c3 = h:GetPropertyChangedSignal("Health"):Connect(function()
+        task.defer(forceHP) task.delay(0.01,forceHP)
+    end)
+    table.insert(_acConns, c3)
+    local c4 = h:GetPropertyChangedSignal("MaxHealth"):Connect(function()
+        if Cfg.AntiAC.On and h.MaxHealth < 100 then
+            pcall(function() h.MaxHealth=100 h.Health=100 end)
+        end
+    end)
+    table.insert(_acConns, c4)
+
+    local char = Char()
+    if char then
+        local killed = SP_KillTouched(char)
+        if killed > 0 then Notify("🕷️ Touched","Killed "..killed.." conn",T.Yellow,2) end
+        SP_CleanChar(char)
+    end
+    task.spawn(function()
+        local k = SP_KillScripts()
+        if k > 0 then Notify("🕷️ Scripts","Killed "..k.." AC scripts",T.Yellow,2) end
+    end)
+
+    local c5 = game.DescendantAdded:Connect(function(obj)
+        if not Cfg.AntiAC.On then return end
+        task.defer(function() pcall(function()
+            local dec = SP_Eval(obj, 0)
+            if dec == "block" then
+                if obj:IsA("Script") or obj:IsA("LocalScript") then
+                    obj.Disabled = true
+                    Notify("🕷️ New Script","Killed: "..obj.Name,T.Yellow,2)
+                elseif obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+                    SP_KillConns(obj)
+                end
+            end
+            local c2 = Char()
+            if obj:IsA("BasePart") and c2 and obj:IsDescendantOf(c2) then
+                task.delay(0.05, function() SP_KillConns(obj) end)
+            end
+        end) end)
+    end)
+    table.insert(_acConns, c5)
+
+    task.spawn(function()
+        local sf = 0
+        while Cfg.AntiAC.On and h and h.Parent do
+            sf = sf + 1
+            SP_Decay()
+            forceWS() forceJP() forceHP()
+            pcall(function() if not h.JumpEnabled then h.JumpEnabled=true end end)
+            task.wait(0.033)
+        end
+    end)
+
+    task.spawn(function()
+        task.wait(SPIDER.LEARN_WINDOW)
+        SPIDER.learning = false
+        local wl = 0
+        for _, rec in pairs(SPIDER.scores) do if rec.whitelist then wl=wl+1 end end
+        Notify("🕷️ Spider AI","Learned · "..wl.." remotes safe",T.Green,4)
+    end)
+
+    task.spawn(function()
+        while Cfg.AntiAC.On and h and h.Parent do
+            SP_KillScripts()
+            local c2 = Char()
+            if c2 then SP_KillTouched(c2) SP_CleanChar(c2) end
+            task.wait(2)
+        end
+    end)
+
+    Notify("🕷️ Spider v1","Injected · Learning "..SPIDER.LEARN_WINDOW.."s...",T.Acc2,5)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- MAIN WINDOW
+-- ═══════════════════════════════════════════════════════════════════════════════
+local function winW() local vx,_ = GetVP() return _mfloor(_mclamp(vx*(IsMobile and 0.92 or 0.27), 260, 530)) end
+local function winH() local _,vy = GetVP() return _mfloor(_mclamp(vy*(IsMobile and 0.84 or 0.82), 400, 840)) end
+local WW, WH = winW(), winH()
+local CH   = S(IsMobile and 62 or 54)
+local SH2  = S(IsMobile and 72 or 64)
+local FL   = S(13) local FM = S(11) local FS = S(10) local FXS = S(9)
+
+local Win = Instance.new("Frame", GUI)
+Win.Name = "MainWin"
+Win.Size = UDim2.new(0, WW, 0, WH)
+Win.Position = UDim2.new(0, S(14), 0.5, -WH/2)
+Win.BackgroundColor3 = T.BG
+Win.BorderSizePixel = 0
+mkCorner(Win, S(20))
+local winStk = mkStroke(Win, T.Acc, 1.7)
+addShimmer(winStk, 0)
+
+local Clip = Instance.new("Frame", Win)
+Clip.Size = UDim2.new(1,0,1,0)
+Clip.BackgroundTransparency = 1
+Clip.BorderSizePixel = 0
+Clip.ClipsDescendants = true
+mkCorner(Clip, S(20))
+
+local TopLine = Instance.new("Frame", Clip)
+TopLine.Size = UDim2.new(1,0,0,S(3))
+TopLine.BackgroundColor3 = T.Acc
+TopLine.BorderSizePixel = 0
+local TLG = Instance.new("UIGradient", TopLine)
+addShimmerGrad(TLG, 0)
+
+local HH = S(58)
+local Head = Instance.new("Frame", Clip)
+Head.Size = UDim2.new(1,0,0,HH)
+Head.Position = UDim2.new(0,0,0,S(3))
+Head.BackgroundColor3 = T.Panel
+Head.BorderSizePixel = 0
+mkCorner(Head, S(18))
+
+local LSZ = S(42)
+local LogoF = Instance.new("Frame", Head)
+LogoF.Size = UDim2.new(0,LSZ,0,LSZ)
+LogoF.Position = UDim2.new(0,S(12),0.5,-LSZ/2)
+LogoF.BackgroundColor3 = T.Acc
+LogoF.BorderSizePixel = 0
+mkCorner(LogoF, S(14))
+local logoStk = mkStroke(LogoF, T.Acc2, 1.3)
+addShimmer(logoStk, 0.1)
+
+local LogoImg = Instance.new("ImageLabel", LogoF)
+LogoImg.Image = "rbxassetid://101926931672087"
+LogoImg.Size = UDim2.new(1,0,1,0)
+LogoImg.BackgroundTransparency = 1
+mkCorner(LogoImg, S(14))
+local LogoFb = Instance.new("TextLabel", LogoF)
+LogoFb.Text = "🥟"
+LogoFb.Size = UDim2.new(1,0,1,0)
+LogoFb.BackgroundTransparency = 1
+LogoFb.TextScaled = true
+LogoImg:GetPropertyChangedSignal("IsLoaded"):Connect(function()
+    if LogoImg.IsLoaded then LogoFb.Visible = false end
+end)
+
+local TitleL = Instance.new("TextLabel", Head)
+TitleL.Text = "PELMEN PVP"
+TitleL.Size = UDim2.new(0,S(175),0,S(20))
+TitleL.Position = UDim2.new(0,S(62),0,S(8))
+TitleL.BackgroundTransparency = 1
+TitleL.TextColor3 = T.White
+TitleL.Font = Enum.Font.GothamBold
+TitleL.TextSize = S(15)
+TitleL.TextXAlignment = Enum.TextXAlignment.Left
+
+local VerL = Instance.new("TextLabel", Head)
+VerL.Text = "v2.0 · 🕷️Spider · "..(IsMobile and "📱 Mobile" or "🖥️ PC")
+VerL.Size = UDim2.new(0,S(210),0,S(14))
+VerL.Position = UDim2.new(0,S(62),0,S(30))
+VerL.BackgroundTransparency = 1
+VerL.TextColor3 = T.Sub
+VerL.Font = Enum.Font.Gotham
+VerL.TextSize = S(10)
+VerL.TextXAlignment = Enum.TextXAlignment.Left
+
+local MinBtn = Instance.new("TextButton", Head)
+MinBtn.Text = "−"
+MinBtn.Size = UDim2.new(0,S(30),0,S(30))
+MinBtn.Position = UDim2.new(1,-S(42),0.5,-S(15))
+MinBtn.BackgroundColor3 = T.Card
+MinBtn.TextColor3 = T.Sub
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextSize = S(18)
+MinBtn.BorderSizePixel = 0
+MinBtn.AutoButtonColor = false
+mkCorner(MinBtn, S(12))
+
+local TABH = S(32)
+local TabBar = Instance.new("Frame", Clip)
+TabBar.Size = UDim2.new(1,-S(24),0,TABH)
+TabBar.Position = UDim2.new(0,S(12),0,HH+S(7))
+TabBar.BackgroundColor3 = T.Panel
+TabBar.BorderSizePixel = 0
+mkCorner(TabBar, S(14))
+local TBL = Instance.new("UIListLayout", TabBar)
+TBL.FillDirection = Enum.FillDirection.Horizontal
+TBL.SortOrder = Enum.SortOrder.LayoutOrder
+TBL.Padding = UDim.new(0, S(3))
+mkPad(TabBar, S(4),S(4),S(4),S(4))
+
+local STOP = HH + TABH + S(16)
+local Scroll = Instance.new("ScrollingFrame", Clip)
+Scroll.Size = UDim2.new(1,-S(16),1,-STOP-S(8))
+Scroll.Position = UDim2.new(0,S(8),0,STOP)
+Scroll.BackgroundTransparency = 1
+Scroll.BorderSizePixel = 0
+Scroll.ScrollBarThickness = S(3)
+Scroll.ScrollBarImageColor3 = T.Acc
+Scroll.CanvasSize = UDim2.new(0,0,0,0)
+Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+local SLL = Instance.new("UIListLayout", Scroll)
+SLL.Padding = UDim.new(0,S(7))
+SLL.SortOrder = Enum.SortOrder.LayoutOrder
+mkPad(Scroll, 0,0,S(6),S(6))
+
+-- ── UI COMPONENTS ─────────────────────────────────────────────────────────────
+local function Section(txt, col)
+    col = col or T.Acc
+    local F = Instance.new("Frame", Scroll)
+    F.Size = UDim2.new(1,0,0,S(22))
+    F.BackgroundTransparency = 1
+    local Bar = Instance.new("Frame",F)
+    Bar.Size = UDim2.new(0,S(3),0.7,0)
+    Bar.Position = UDim2.new(0,0,0.15,0)
+    Bar.BackgroundColor3 = col
+    Bar.BorderSizePixel = 0
+    mkCorner(Bar,S(3))
+    local Line = Instance.new("Frame",F)
+    Line.Size = UDim2.new(1,-S(14),0,S(1))
+    Line.Position = UDim2.new(0,S(8),1,-S(1))
+    Line.BackgroundColor3 = T.Border
+    Line.BorderSizePixel = 0
+    local L = Instance.new("TextLabel",F)
+    L.Text = txt:upper()
+    L.Size = UDim2.new(1,-S(12),1,0)
+    L.Position = UDim2.new(0,S(10),0,0)
+    L.BackgroundTransparency = 1
+    L.TextColor3 = col
+    L.Font = Enum.Font.GothamBold
+    L.TextSize = FXS
+    L.TextXAlignment = Enum.TextXAlignment.Left
+end
+
+local function Toggle(label, icon, desc, acc, getV, setV, onChange)
+    acc = acc or T.Acc
+    local Card = Instance.new("Frame", Scroll)
+    Card.Size = UDim2.new(1,0,0,CH)
+    Card.BackgroundColor3 = T.Card
+    Card.BorderSizePixel = 0
+    mkCorner(Card, S(16))
+    local stk = mkStroke(Card, T.Border, 1)
+
+    local IB_SZ = S(36)
+    local IB = Instance.new("Frame",Card)
+    IB.Size = UDim2.new(0,IB_SZ,0,IB_SZ)
+    IB.Position = UDim2.new(0,S(10),0.5,-IB_SZ/2)
+    IB.BackgroundColor3 = getV() and acc or T.Panel
+    IB.BorderSizePixel = 0
+    mkCorner(IB, S(12))
+    local IL = Instance.new("TextLabel",IB)
+    IL.Text = icon
+    IL.Size = UDim2.new(1,0,1,0)
+    IL.BackgroundTransparency = 1
+    IL.TextScaled = true
+    IL.ZIndex = 2
+
+    local NL = Instance.new("TextLabel",Card)
+    NL.Text = label
+    NL.Size = UDim2.new(0,S(155),0,S(18))
+    NL.Position = UDim2.new(0,S(54),0,S(7))
+    NL.BackgroundTransparency = 1
+    NL.TextColor3 = getV() and T.White or T.Text
+    NL.Font = Enum.Font.GothamBold
+    NL.TextSize = FL
+    NL.TextXAlignment = Enum.TextXAlignment.Left
+
+    local DL = Instance.new("TextLabel",Card)
+    DL.Text = desc
+    DL.Size = UDim2.new(0,S(160),0,S(13))
+    DL.Position = UDim2.new(0,S(54),0,S(27))
+    DL.BackgroundTransparency = 1
+    DL.TextColor3 = T.Sub
+    DL.Font = Enum.Font.Gotham
+    DL.TextSize = FS
+    DL.TextXAlignment = Enum.TextXAlignment.Left
+
+    local PW, PH = S(46), S(24)
+    local Pill = Instance.new("Frame",Card)
+    Pill.Size = UDim2.new(0,PW,0,PH)
+    Pill.Position = UDim2.new(1,-PW-S(12),0.5,-PH/2)
+    Pill.BackgroundColor3 = getV() and acc or T.Pill
+    Pill.BorderSizePixel = 0
+    mkCorner(Pill, S(14))
+    mkStroke(Pill, T.Border, 1)
+
+    local KSZ = S(17)
+    local Knob = Instance.new("Frame",Pill)
+    Knob.Size = UDim2.new(0,KSZ,0,KSZ)
+    Knob.Position = getV() and UDim2.new(1,-KSZ-S(3),0.5,-KSZ/2) or UDim2.new(0,S(3),0.5,-KSZ/2)
+    Knob.BackgroundColor3 = T.White
+    Knob.BorderSizePixel = 0
+    mkCorner(Knob, S(10))
+
+    local Dot = Instance.new("Frame",Card)
+    Dot.Size = UDim2.new(0,S(7),0,S(7))
+    Dot.Position = UDim2.new(1,-S(15),0,S(9))
+    Dot.BackgroundColor3 = getV() and T.Green or T.Sub
+    Dot.BorderSizePixel = 0
+    mkCorner(Dot, S(4))
+
+    local function Refresh(s)
+        Tw(Pill,  {BackgroundColor3 = s and acc or T.Pill})
+        Tw(Knob,  {Position = s and UDim2.new(1,-KSZ-S(3),0.5,-KSZ/2) or UDim2.new(0,S(3),0.5,-KSZ/2),
+                   BackgroundColor3 = s and T.White or Color3.fromRGB(110,110,145)})
+        Tw(IB,    {BackgroundColor3 = s and acc or T.Panel})
+        Tw(stk,   {Color = s and acc or T.Border})
+        Tw(Dot,   {BackgroundColor3 = s and T.Green or T.Sub})
+        NL.TextColor3 = s and T.White or T.Text
+        if s then
+            addShimmer(stk, _mrnd()*0.3)
+        else
+            for i=#_shimmers,1,-1 do
+                if _shimmers[i].obj == stk then table.remove(_shimmers,i) end
+            end
+            pcall(function() stk.Color = T.Border end)
+        end
+    end
+
+    Card.InputBegan:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+            Tw(Card,{BackgroundColor3=T.CardHov},0.08)
+            setV(not getV()) Refresh(getV()) ScheduleSave()
+            if onChange then onChange(getV()) end
+            task.delay(0.12, function() Tw(Card,{BackgroundColor3=T.Card},0.18) end)
+        end
+    end)
+    return Card, Refresh
+end
+
+local function Slider(label, icon, acc, minV, maxV, getV, setV, suffix, onChange)
+    suffix = suffix or "" acc = acc or T.Acc
+    local Card = Instance.new("Frame", Scroll)
+    Card.Size = UDim2.new(1,0,0,SH2)
+    Card.BackgroundColor3 = T.Card
+    Card.BorderSizePixel = 0
+    mkCorner(Card, S(16))
+    mkStroke(Card, T.Border, 1)
+
+    local IL = Instance.new("TextLabel",Card)
+    IL.Text = icon
+    IL.Size = UDim2.new(0,S(28),0,S(28))
+    IL.Position = UDim2.new(0,S(10),0,S(10))
+    IL.BackgroundTransparency = 1
+    IL.TextScaled = true
+
+    local NL = Instance.new("TextLabel",Card)
+    NL.Text = label
+    NL.Size = UDim2.new(0,S(155),0,S(18))
+    NL.Position = UDim2.new(0,S(42),0,S(8))
+    NL.BackgroundTransparency = 1
+    NL.TextColor3 = T.Text
+    NL.Font = Enum.Font.GothamBold
+    NL.TextSize = FM
+    NL.TextXAlignment = Enum.TextXAlignment.Left
+
+    local VL = Instance.new("TextLabel",Card)
+    VL.Text = getV()..suffix
+    VL.Size = UDim2.new(0,S(80),0,S(18))
+    VL.Position = UDim2.new(1,-S(86),0,S(8))
+    VL.BackgroundTransparency = 1
+    VL.TextColor3 = acc
+    VL.Font = Enum.Font.GothamBold
+    VL.TextSize = FM
+    VL.TextXAlignment = Enum.TextXAlignment.Right
+
+    local Track = Instance.new("Frame",Card)
+    Track.Size = UDim2.new(1,-S(20),0,S(6))
+    Track.Position = UDim2.new(0,S(10),0,S(44))
+    Track.BackgroundColor3 = T.Pill
+    Track.BorderSizePixel = 0
+    mkCorner(Track, S(6))
+
+    local pct = (getV()-minV)/(maxV-minV)
+    local Fill = Instance.new("Frame",Track)
+    Fill.Size = UDim2.new(pct,0,1,0)
+    Fill.BackgroundColor3 = acc
+    Fill.BorderSizePixel = 0
+    mkCorner(Fill, S(6))
+    local FG = Instance.new("UIGradient",Fill)
+    addShimmerGrad(FG, 0.15)
+
+    local Handle = Instance.new("Frame",Track)
+    Handle.Size = UDim2.new(0,S(16),0,S(16))
+    Handle.AnchorPoint = Vector2.new(0.5,0.5)
+    Handle.Position = UDim2.new(pct,0,0.5,0)
+    Handle.BackgroundColor3 = T.White
+    Handle.BorderSizePixel = 0
+    Handle.ZIndex = 3
+    mkCorner(Handle, S(9))
+    local hStk = mkStroke(Handle, T.Acc, 1.2)
+    addShimmer(hStk, 0.3)
+
+    local dragging = false
+    local function SetVal(x)
+        local a = Track.AbsolutePosition.X
+        local w = Track.AbsoluteSize.X
+        local p = _mclamp((x-a)/w, 0, 1)
+        local v = _mfloor(minV + p*(maxV-minV))
+        setV(v) VL.Text = v..suffix
+        Tw(Fill,   {Size=UDim2.new(p,0,1,0)})
+        Tw(Handle, {Position=UDim2.new(p,0,0.5,0)})
+        ScheduleSave()
+        if onChange then onChange(v) end
+    end
+    Track.InputBegan:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+            dragging = true SetVal(i.Position.X)
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then
+            SetVal(i.Position.X)
+        end
+    end)
+    UIS.InputEnded:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+end
+
+local function ActionBtn(label, icon, color, desc, onClick)
+    local Card = Instance.new("Frame", Scroll)
+    Card.Size = UDim2.new(1,0,0,CH)
+    Card.BackgroundColor3 = T.Card
+    Card.BorderSizePixel = 0
+    mkCorner(Card, S(16))
+    local stk = mkStroke(Card, T.Border, 1)
+
+    local IB_SZ = S(36)
+    local IB = Instance.new("Frame",Card)
+    IB.Size = UDim2.new(0,IB_SZ,0,IB_SZ)
+    IB.Position = UDim2.new(0,S(10),0.5,-IB_SZ/2)
+    IB.BackgroundColor3 = T.Panel
+    IB.BorderSizePixel = 0
+    mkCorner(IB, S(12))
+    local IL = Instance.new("TextLabel",IB)
+    IL.Text = icon IL.Size = UDim2.new(1,0,1,0) IL.BackgroundTransparency = 1 IL.TextScaled = true IL.ZIndex = 2
+
+    local NL = Instance.new("TextLabel",Card)
+    NL.Text = label NL.Size = UDim2.new(0,S(150),0,S(18)) NL.Position = UDim2.new(0,S(54),0,S(7))
+    NL.BackgroundTransparency = 1 NL.TextColor3 = T.Text NL.Font = Enum.Font.GothamBold NL.TextSize = FL
+    NL.TextXAlignment = Enum.TextXAlignment.Left
+
+    local DL = Instance.new("TextLabel",Card)
+    DL.Text = desc DL.Size = UDim2.new(0,S(155),0,S(13)) DL.Position = UDim2.new(0,S(54),0,S(27))
+    DL.BackgroundTransparency = 1 DL.TextColor3 = T.Sub DL.Font = Enum.Font.Gotham DL.TextSize = FS
+    DL.TextXAlignment = Enum.TextXAlignment.Left
+
+    local BW, BH = S(64), S(29)
+    local RB = Instance.new("TextButton",Card)
+    RB.Text = "▶ Run"
+    RB.Size = UDim2.new(0,BW,0,BH)
+    RB.Position = UDim2.new(1,-BW-S(12),0.5,-BH/2)
+    RB.BackgroundColor3 = color RB.TextColor3 = T.White RB.Font = Enum.Font.GothamBold RB.TextSize = FM
+    RB.BorderSizePixel = 0 RB.AutoButtonColor = false
+    mkCorner(RB, S(12))
+    mkStroke(RB, color, 1)
+
+    local function flash()
+        Tw(RB,  {BackgroundColor3 = T.White},    0.08)
+        Tw(IB,  {BackgroundColor3 = color},       0.08)
+        Tw(stk, {Color = color})
+        task.delay(0.22, function()
+            Tw(RB,  {BackgroundColor3 = color},  0.22)
+            Tw(IB,  {BackgroundColor3 = T.Panel},0.4)
+            Tw(stk, {Color = T.Border},          0.4)
+        end)
+        pcall(onClick)
+    end
+    RB.MouseButton1Click:Connect(flash)
+    RB.TouchTap:Connect(flash)
+    Card.InputBegan:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+            Tw(Card,{BackgroundColor3=T.CardHov},0.08)
+        end
+    end)
+    Card.InputEnded:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+            Tw(Card,{BackgroundColor3=T.Card},0.15)
+        end
+    end)
+end
+
+-- ── FLY SYSTEM ────────────────────────────────────────────────────────────────
+_flyActive = false
+local _flyBG, _flyBV = nil, nil
+local _flySpd = 0
+local _flyCtrl = {f=0,b=0,l=0,r=0}
+local _flyLast = {f=0,b=0,l=0,r=0}
+local _mobFC   = {f=false,b=false,l=false,r=false,u=false,d=false}
+
+local function _getFlyMax() return Cfg.Fly.Speed * 10 end
+
+local function _updFlyCtrl()
+    _flyCtrl.f = ((UIS:IsKeyDown(Enum.KeyCode.W) or UIS:IsKeyDown(Enum.KeyCode.Up))    or _mobFC.f) and 1  or 0
+    _flyCtrl.b = ((UIS:IsKeyDown(Enum.KeyCode.S) or UIS:IsKeyDown(Enum.KeyCode.Down))  or _mobFC.b) and -1 or 0
+    _flyCtrl.l = ((UIS:IsKeyDown(Enum.KeyCode.A) or UIS:IsKeyDown(Enum.KeyCode.Left))  or _mobFC.l) and -1 or 0
+    _flyCtrl.r = ((UIS:IsKeyDown(Enum.KeyCode.D) or UIS:IsKeyDown(Enum.KeyCode.Right)) or _mobFC.r) and 1  or 0
+end
+
+local function StopFly()
+    _flyActive = false
+    local char = Char()
+    if char then
+        local h = char:FindFirstChildOfClass("Humanoid")
+        if h then
+            for _,s in pairs(Enum.HumanoidStateType:GetEnumItems()) do
+                pcall(function() h:SetStateEnabled(s,true) end)
+            end
+            pcall(function() h:ChangeState(Enum.HumanoidStateType.RunningNoPhysics) end)
+            h.PlatformStand = false
+        end
+        local anim = char:FindFirstChild("Animate")
+        if anim then anim.Disabled = false end
+    end
+    if _flyBG and _flyBG.Parent then _flyBG:Destroy() end _flyBG = nil
+    if _flyBV and _flyBV.Parent then _flyBV:Destroy() end _flyBV = nil
+    _flySpd = 0
+    _flyCtrl = {f=0,b=0,l=0,r=0}
+    _flyLast  = {f=0,b=0,l=0,r=0}
+    _mobFC    = {f=false,b=false,l=false,r=false,u=false,d=false}
+end
+
+local function StartFly()
+    if _flyActive then StopFly() return end
+    local char = Char() if not char then return end
+    local h = char:FindFirstChildOfClass("Humanoid") if not h then return end
+    local isR6 = h.RigType == Enum.HumanoidRigType.R6
+    local torso = isR6 and char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+    if not torso then return end
+    _flyActive = true
+    for _,s in pairs(Enum.HumanoidStateType:GetEnumItems()) do
+        pcall(function() h:SetStateEnabled(s,false) end)
+    end
+    pcall(function() h:ChangeState(Enum.HumanoidStateType.Swimming) end)
+    h.PlatformStand = true
+    local anim = char:FindFirstChild("Animate") if anim then anim.Disabled = true end
+    for _,tr in pairs(h:GetPlayingAnimationTracks()) do pcall(function() tr:AdjustSpeed(0) end) end
+    _flyBG = Instance.new("BodyGyro", torso)
+    _flyBG.P = 9e4 _flyBG.MaxTorque = Vector3.new(9e9,9e9,9e9) _flyBG.CFrame = torso.CFrame
+    _flyBV = Instance.new("BodyVelocity", torso)
+    _flyBV.Velocity = Vector3.new(0,0.1,0) _flyBV.MaxForce = Vector3.new(9e9,9e9,9e9)
+    task.spawn(function()
+        _flySpd = 0
+        while _flyActive and char and h and h.Parent do
+            RunService.RenderStepped:Wait()
+            _updFlyCtrl()
+            local maxS = _getFlyMax()
+            local moving = (_flyCtrl.l+_flyCtrl.r)~=0 or (_flyCtrl.f+_flyCtrl.b)~=0
+            if moving then
+                _flySpd = _mmin(_flySpd + 0.6 + _flySpd/maxS, maxS)
+            else
+                _flySpd = _mmax(_flySpd - 1.2, 0)
+            end
+            local camCF = Camera.CFrame
+            if moving then
+                _flyBV.Velocity = (camCF.LookVector*(_flyCtrl.f+_flyCtrl.b) + ((camCF*CFrame.new(_flyCtrl.l+_flyCtrl.r,(_flyCtrl.f+_flyCtrl.b)*0.2,0)).Position-camCF.Position))*_flySpd
+                _flyLast = {f=_flyCtrl.f, b=_flyCtrl.b, l=_flyCtrl.l, r=_flyCtrl.r}
+            elseif _flySpd~=0 then
+                _flyBV.Velocity = (camCF.LookVector*(_flyLast.f+_flyLast.b) + ((camCF*CFrame.new(_flyLast.l+_flyLast.r,(_flyLast.f+_flyLast.b)*0.2,0)).Position-camCF.Position))*_flySpd
+            else
+                _flyBV.Velocity = Vector3.new(0,0,0)
+            end
+            if UIS:IsKeyDown(Enum.KeyCode.Space) or _mobFC.u then
+                pcall(function() torso.CFrame = torso.CFrame * CFrame.new(0,1.2,0) end)
+            elseif UIS:IsKeyDown(Enum.KeyCode.C) or UIS:IsKeyDown(Enum.KeyCode.LeftControl) or _mobFC.d then
+                pcall(function() torso.CFrame = torso.CFrame * CFrame.new(0,-1.2,0) end)
+            end
+            pcall(function()
+                _flyBG.CFrame = camCF * CFrame.Angles(-_mrad((_flyCtrl.f+_flyCtrl.b)*45*_flySpd/_mmax(_getFlyMax(),1)),0,0)
+            end)
+        end
+        if _flyActive then StopFly() end
+    end)
+end
+
+-- ── MOBILE D-PAD ──────────────────────────────────────────────────────────────
+if IsMobile then
+    local DPSZ = S(172) local BTN = S(52) local cx = (DPSZ-BTN)/2
+    local DPad = Instance.new("Frame", GUI)
+    DPad.Size = UDim2.new(0,DPSZ,0,DPSZ)
+    DPad.Position = UDim2.new(1,-DPSZ-S(14),0.5,-DPSZ/2)
+    DPad.BackgroundTransparency = 1
+    DPad.ZIndex = 50
+
+    local function dBtn(txt, x, y, onHold)
+        local B = Instance.new("TextButton", DPad)
+        B.Text = txt B.Size = UDim2.new(0,BTN,0,BTN) B.Position = UDim2.new(0,x,0,y)
+        B.BackgroundColor3 = T.Panel B.TextColor3 = T.White B.Font = Enum.Font.GothamBold B.TextSize = S(17)
+        B.BorderSizePixel = 0 B.AutoButtonColor = false B.ZIndex = 51
+        B.BackgroundTransparency = 0.2
+        mkCorner(B, S(15))
+        local ds = mkStroke(B, T.Acc, 1.5)
+        addShimmer(ds, _mrnd()*0.4)
+        B.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch then
+                onHold(true)
+                Tw(B,{BackgroundTransparency=0, BackgroundColor3=T.Acc},0.07)
+            end
+        end)
+        B.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch then
+                onHold(false)
+                Tw(B,{BackgroundTransparency=0.2, BackgroundColor3=T.Panel},0.12)
+            end
+        end)
+    end
+    dBtn("▲", cx,          0,              function(v) _mobFC.f=v end)
+    dBtn("▼", cx,          DPSZ-BTN,       function(v) _mobFC.b=v end)
+    dBtn("◀", 0,           (DPSZ-BTN)/2,   function(v) _mobFC.l=v end)
+    dBtn("▶", DPSZ-BTN,    (DPSZ-BTN)/2,   function(v) _mobFC.r=v end)
+
+    local VBW = S(58) local VBH = S(116)
+    local VBar = Instance.new("Frame", GUI)
+    VBar.Size = UDim2.new(0,VBW,0,VBH)
+    VBar.Position = UDim2.new(1,-DPSZ-VBW-S(24),0.5,-VBH/2)
+    VBar.BackgroundColor3 = T.Panel VBar.BorderSizePixel = 0 VBar.ZIndex = 50
+    mkCorner(VBar, S(18))
+    local vStk = mkStroke(VBar, T.Acc, 1.5)
+    addShimmer(vStk, 0.5)
+    local VBLL = Instance.new("UIListLayout", VBar)
+    VBLL.FillDirection = Enum.FillDirection.Vertical
+    VBLL.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    VBLL.VerticalAlignment = Enum.VerticalAlignment.Center
+    VBLL.Padding = UDim.new(0, S(6))
+    mkPad(VBar, S(7),S(7),S(8),S(8))
+    local function vBtn(txt, onHold)
+        local B = Instance.new("TextButton", VBar)
+        B.Text = txt B.Size = UDim2.new(1,0,0,S(46))
+        B.BackgroundColor3 = T.Card B.TextColor3 = T.White B.Font = Enum.Font.GothamBold B.TextSize = S(12)
+        B.BorderSizePixel = 0 B.AutoButtonColor = false B.ZIndex = 51
+        B.BackgroundTransparency = 0.2
+        mkCorner(B, S(12))
+        B.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch then
+                onHold(true)
+                Tw(B,{BackgroundTransparency=0, BackgroundColor3=T.Acc},0.07)
+            end
+        end)
+        B.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch then
+                onHold(false)
+                Tw(B,{BackgroundTransparency=0.2, BackgroundColor3=T.Card},0.12)
+            end
+        end)
+    end
+    vBtn("▲UP", function(v) _mobFC.u=v end)
+    vBtn("▼DN", function(v) _mobFC.d=v end)
+end
+
+-- ── FAST COLLECT ──────────────────────────────────────────────────────────────
+local _lastCollect  = 0
+local _cacheP       = {}
+local _cacheD       = {}
+local _cacheScan    = 0
+local _RESCAN_TIME  = 4.0
+
+local function _rebuildCache()
+    _cacheP = {} _cacheD = {}
+    for _,v in pairs(workspace:GetDescendants()) do
+        if v:IsA("ProximityPrompt") and v.Enabled then
+            table.insert(_cacheP, v)
+        elseif v:IsA("ClickDetector") then
+            table.insert(_cacheD, v)
+        end
+    end
+end
+
+local function FireCollect()
+    pcall(function()
+        local info = ContextAction:GetAllBoundActionInfo()
+        for name,_ in pairs(info) do
+            local nl = name:lower()
+            if nl:find("collect") or nl:find("interact") or nl:find("pick") or nl:find("gather") or nl:find("use") or nl:find("grab") then
+                pcall(function() ContextAction:CallFunction(name, Enum.UserInputState.Begin, nil) end)
+            end
+        end
+    end)
+    if _S.kp then pcall(_S.kp, 0x45) end
+    local myR = Root()
+    if myR then
+        local rp = myR.Position
+        for _,v in ipairs(_cacheP) do
+            if v and v.Parent and v.Enabled then
+                local part = v.Parent:IsA("BasePart") and v.Parent
+                    or (v.Parent:IsA("Model") and (v.Parent.PrimaryPart or v.Parent:FindFirstChildOfClass("BasePart")))
+                if part then
+                    local dist = (rp - part.Position).Magnitude
+                    if dist <= v.MaxActivationDistance + 5 then
+                        if _S.fprox then pcall(_S.fprox,v) else pcall(function() v:InputHoldBegin() end) end
+                    end
+                end
+            end
+        end
+        for _,v in ipairs(_cacheD) do
+            if v and v.Parent and v.Parent:IsA("BasePart") then
+                local dist = (rp - v.Parent.Position).Magnitude
+                if dist <= v.MaxActivationDistance + 5 then
+                    if _S.fclk then pcall(_S.fclk,v) else pcall(function() v.MouseClick:Fire(LP) end) end
+                end
+            end
+        end
+    end
+end
+
+-- ── TABS ──────────────────────────────────────────────────────────────────────
+local TABS = {
+    {name="Combat", icon="⚔️"},
+    {name="Move",   icon="🏃"},
+    {name="Fly",    icon="✈️"},
+    {name="Server", icon="🌐"},
+    {name="Config", icon="⚙️"},
+}
+local TabBtns  = {}
+local ActiveTab = nil
+
+for _, tab in ipairs(TABS) do
+    local Btn = Instance.new("TextButton", TabBar)
+    Btn.Size = UDim2.new(0.2,-S(3),1,0)
+    Btn.BackgroundColor3 = T.Card
+    Btn.Text = tab.icon
+    Btn.TextSize = IsMobile and S(16) or S(14)
+    Btn.BorderSizePixel = 0
+    Btn.Font = Enum.Font.GothamBold
+    Btn.TextColor3 = T.Sub
+    Btn.AutoButtonColor = false
+    mkCorner(Btn, S(10))
+    TabBtns[tab.name] = Btn
+end
+
+local function ClearScroll()
+    for _,c in pairs(Scroll:GetChildren()) do
+        if not c:IsA("UIListLayout") and not c:IsA("UIPadding") then c:Destroy() end
+    end
+end
+
+local function SwitchTab(name)
+    if ActiveTab == name then return end
+    if ActiveTab and TabBtns[ActiveTab] then
+        Tw(TabBtns[ActiveTab], {BackgroundColor3=T.Card, TextColor3=T.Sub})
+        local prevStk = TabBtns[ActiveTab]:FindFirstChildOfClass("UIStroke")
+        if prevStk then
+            for i=#_shimmers,1,-1 do
+                if _shimmers[i].obj == prevStk then table.remove(_shimmers,i) end
+            end
+            prevStk:Destroy()
+        end
+    end
+    ClearScroll()
+    ActiveTab = name
+    Tw(TabBtns[name], {BackgroundColor3=T.Acc, TextColor3=T.White})
+    local tStk = mkStroke(TabBtns[name], T.Acc2, 1.5)
+    addShimmer(tStk, 0)
+
+    if name == "Combat" then
+        Section("Fling", T.Red)
+        Toggle("Mini Fling","💥","G = кинуть ближайшего",T.Red,
+            function() return Cfg.Fling.On end,
+            function(v) Cfg.Fling.On=v end,
+            function(v) Notify("💥 Fling",v and "ON" or "OFF",T.Red,2) end)
+        Slider("Fling Power","🚀",T.Red,50,800,function() return Cfg.Fling.Power end,function(v) Cfg.Fling.Power=v end," pw")
+        Slider("Fling Range","📡",T.Red,5,60,function() return Cfg.Fling.Range end,function(v) Cfg.Fling.Range=v end," st")
+
+        Section("Auto Spam",T.Acc)
+        Toggle("Auto Spam","⚡","Авто-стрельба / клик",T.Acc,
+            function() return Cfg.Spam.On end,
+            function(v) Cfg.Spam.On=v end,
+            function(v) Notify("⚡ Spam",v and "ON" or "OFF",T.Acc,2) end)
+        Slider("Spam Delay","⏱",T.Acc,1,50,function() return Cfg.Spam.Delay end,function(v) Cfg.Spam.Delay=v end," ms")
+
+        Section("Fast Collect",T.Green)
+        Toggle("Fast Collect E","🌿","Авто-сбор: E + Prompts",T.Green,
+            function() return Cfg.FastCollect.On end,
+            function(v) Cfg.FastCollect.On=v end,
+            function(v) Notify("🌿 Collect",v and "ON" or "OFF",T.Green,2) end)
+        Slider("Collect Rate","⏩",T.Green,1,20,function() return Cfg.FastCollect.Rate end,function(v) Cfg.FastCollect.Rate=v end," x")
+
+    elseif name == "Move" then
+        Section("Speed",T.Acc)
+        Toggle("Speed Hack","💨","Кастомная скорость",T.Acc,
+            function() return Cfg.Speed.On end,
+            function(v) Cfg.Speed.On=v local h=Hum() if h then h.WalkSpeed=v and Cfg.Speed.Value or 16 end end,
+            function(v) Notify("💨 Speed",v and "ON "..Cfg.Speed.Value.."ws" or "OFF",T.Acc,2) end)
+        Slider("Speed Value","🔢",T.Acc,16,500,function() return Cfg.Speed.Value end,
+            function(v) Cfg.Speed.Value=v if Cfg.Speed.On then local h=Hum() if h then h.WalkSpeed=v end end end," ws")
+
+        Section("Jump",T.Acc2)
+        Toggle("Infinity Jump","🚀","Прыжок без лимита",T.Acc2,
+            function() return Cfg.InfJump.On end,
+            function(v) Cfg.InfJump.On=v end,
+            function(v) Notify("🚀 InfJump",v and "ON" or "OFF",T.Acc2,2) end)
+        Slider("Jump Power","⬆️",T.Acc2,50,400,function() return Cfg.InfJump.Power end,function(v) Cfg.InfJump.Power=v end," jp")
+
+        Section("Защита",T.Acc)
+        Toggle("Shift Lock","🔒","Поворот за камерой",T.Acc,
+            function() return Cfg.ShiftLock.On end,
+            function(v) Cfg.ShiftLock.On=v end,
+            function(v) Notify("🔒 ShiftLock",v and "ON" or "OFF",T.Acc,2) end)
+        Toggle("Anti Ragdoll","🛡️","Блок суставов",T.Green,
+            function() return Cfg.AntiRag.On end,
+            function(v) Cfg.AntiRag.On=v end,
+            function(v) Notify("🛡️ AntiRag",v and "ON" or "OFF",T.Green,2) end)
+        Toggle("Spider v1","🕷️","9 слоёв · AI · Kick · Meta · Script",T.Acc2,
+            function() return Cfg.AntiAC.On end,
+            function(v) Cfg.AntiAC.On=v if v then local h=Hum() if h then StartAntiAC(h) end else StopAntiAC() end end,
+            function(v) Notify("🕷️ Spider v1",v and "ACTIVE · Learning..." or "OFF",T.Acc2,2) end)
+        Toggle("Anti TP Back","🚫","Блок ролбэка",T.Red,
+            function() return Cfg.AntiTP.On end,
+            function(v) Cfg.AntiTP.On=v if v then StartAntiTP() else StopAntiTP() end end,
+            function(v) Notify("🚫 Anti-TP",v and "Активен" or "OFF",T.Red,2) end)
+        Slider("TP Threshold","📏",T.Red,10,150,function() return Cfg.AntiTP.Threshold end,function(v) Cfg.AntiTP.Threshold=v end," st")
+        Toggle("Anti Lag","🧹","Блок спам ремоутов",T.Yellow,
+            function() return Cfg.AntiLag.On end,
+            function(v) Cfg.AntiLag.On=v if v then StartAntiLag() else StopAntiLag() end end,
+            function(v) Notify("🧹 Anti-Lag",v and "3 слоя" or "OFF",T.Yellow,2) end)
+
+    elseif name == "Fly" then
+        Section("✈️ Fly System",T.Acc)
+        local IC = Instance.new("Frame",Scroll)
+        IC.Size = UDim2.new(1,0,0,S(IsMobile and 98 or 82))
+        IC.BackgroundColor3 = T.Card IC.BorderSizePixel = 0
+        mkCorner(IC, S(16))
+        local icStk = mkStroke(IC,T.Acc,1.4)
+        addShimmer(icStk, 0.2)
+        local lines = IsMobile and {
+            "📱 D-Pad справа — вперёд/назад/лево/право",
+            "▲UP / ▼DN — высота",
+            "✈️ Fly кнопка внизу — вкл/выкл",
+        } or {
+            "⌨️ WASD — направление  |  F — вкл/выкл",
+            "Space — вверх  |  C / LCtrl — вниз",
+            "Fly Speed × 10 = studs/sec",
+        }
+        for i,l in ipairs(lines) do
+            local LL = Instance.new("TextLabel",IC)
+            LL.Text = l LL.Size = UDim2.new(1,-S(18),0,S(18)) LL.Position = UDim2.new(0,S(12),0,(i-1)*S(22)+S(8))
+            LL.BackgroundTransparency = 1 LL.TextColor3 = T.Text LL.Font = Enum.Font.Gotham
+            LL.TextSize = S(11) LL.TextXAlignment = Enum.TextXAlignment.Left
+        end
+        Toggle("Fly","✈️","Полёт R6 + R15",T.Acc,
+            function() return _flyActive end,
+            function(v) if v and not _flyActive then StartFly() elseif not v and _flyActive then StopFly() end end,
+            function(v) Cfg.Fly.On=v ScheduleSave() Notify("✈️ Fly",v and "Включён!" or "Выключен",T.Acc,2) end)
+        Slider("Fly Speed","🏎️",T.Acc,1,10,function() return Cfg.Fly.Speed end,function(v) Cfg.Fly.Speed=v end," x")
+
+    elseif name == "Server" then
+        Section("Server Tools",T.Acc)
+        ActionBtn("Rejoin","🔄",T.Acc,"Переподключиться",function()
+            Notify("🔄 Rejoin","Переподключение...",T.Acc,2)
+            task.delay(1,function() pcall(function() TeleportService:Teleport(game.PlaceId,LP) end) end)
+        end)
+        ActionBtn("Server Hop","🌐",T.Acc2,"Найти новый сервер",function()
+            Notify("🌐 ServerHop","Ищем...",T.Acc2,3)
+            task.spawn(function()
+                local ok2,servers = pcall(function()
+                    return HttpService:JSONDecode(
+                        game:HttpGet("https://games.roblox.com/v1/games/"..game.PlaceId.."/servers/Public?sortOrder=Desc&limit=100")
+                    )
+                end)
+                if ok2 and servers and servers.data then
+                    for _,s in ipairs(servers.data) do
+                        if s.id~=game.JobId and s.playing<s.maxPlayers then
+                            Notify("🌐 Прыгаем!","Сервер найден",T.Acc2,2)
+                            task.wait(0.5)
+                            pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId,s.id,LP) end)
+                            return
+                        end
+                    end
+                end
+                Notify("🌐 Fallback","Перезаход",T.Acc2,2)
+                task.wait(0.5)
+                pcall(function() TeleportService:Teleport(game.PlaceId,LP) end)
+            end)
+        end)
+        Section("Lag",T.Red)
+        Toggle("Server Lag","⚡","Спам RemoteEvents",T.Red,
+            function() return Cfg.ServLag.On end,
+            function(v) Cfg.ServLag.On=v end,
+            function(v) Notify("⚡ ServLag",v and "ЛАГАЕМ!" or "Стоп",T.Red,2) end)
+        Slider("Lag Threads","🧵",T.Red,10,200,function() return Cfg.ServLag.Threads end,function(v) Cfg.ServLag.Threads=v end," thr")
+
+    elseif name == "Config" then
+        Section("💾 Сохранение",T.Yellow)
+        local IC2 = Instance.new("Frame",Scroll)
+        IC2.Size = UDim2.new(1,0,0,S(68))
+        IC2.BackgroundColor3 = T.Card IC2.BorderSizePixel = 0
+        mkCorner(IC2, S(16))
+        local icStk2 = mkStroke(IC2,T.Yellow,1.4)
+        addShimmer(icStk2, 0.6)
+        local function cfgStat()
+            if _S.rf then
+                local ok2,raw = sCall(_S.rf,CFG_FILE)
+                if ok2 and raw and #raw>2 then return "✅ Найден ("..#raw.." байт)" end
+            end
+            return _S.wf and "⚠️ Не создан" or "❌ ФС не поддерживается"
+        end
+        local FL2 = Instance.new("TextLabel",IC2) FL2.Text="📂 "..CFG_FILE
+        FL2.Size=UDim2.new(1,-S(18),0,S(20)) FL2.Position=UDim2.new(0,S(12),0,S(6))
+        FL2.BackgroundTransparency=1 FL2.TextColor3=T.Yellow FL2.Font=Enum.Font.GothamBold FL2.TextSize=S(11) FL2.TextXAlignment=Enum.TextXAlignment.Left
+        local SL2 = Instance.new("TextLabel",IC2) SL2.Text=cfgStat()
+        SL2.Size=UDim2.new(1,-S(18),0,S(14)) SL2.Position=UDim2.new(0,S(12),0,S(28))
+        SL2.BackgroundTransparency=1 SL2.TextColor3=T.Sub SL2.Font=Enum.Font.Gotham SL2.TextSize=S(10) SL2.TextXAlignment=Enum.TextXAlignment.Left
+        local AL2 = Instance.new("TextLabel",IC2) AL2.Text="⚡ Авто-сохранение через 1.5с"
+        AL2.Size=UDim2.new(1,-S(18),0,S(13)) AL2.Position=UDim2.new(0,S(12),0,S(46))
+        AL2.BackgroundTransparency=1 AL2.TextColor3=T.Sub AL2.Font=Enum.Font.Gotham AL2.TextSize=S(9) AL2.TextXAlignment=Enum.TextXAlignment.Left
+        ActionBtn("Save Now","💾",T.Yellow,"Принудительное сохранение",function()
+            SaveCfg(Cfg) SL2.Text=cfgStat() Notify("💾 Saved","CFG обновлён",T.Yellow,2)
+        end)
+        ActionBtn("Reset","🔄",T.Red,"Сброс всех настроек",function()
+            Cfg=DeepCopy(DEFAULT) SaveCfg(Cfg) SL2.Text=cfgStat()
+            if _flyActive then StopFly() end
+            Notify("🔄 Сброс","По умолчанию",T.Red,2)
+        end)
+        Section("🕷️ Spider v1",T.Acc2)
+        local SIC = Instance.new("Frame",Scroll) SIC.Size=UDim2.new(1,0,0,S(68))
+        SIC.BackgroundColor3=T.Card SIC.BorderSizePixel=0 mkCorner(SIC,S(16))
+        local sicStk = mkStroke(SIC,T.Acc2,1.4) addShimmer(sicStk,0.3)
+        local SIL1=Instance.new("TextLabel",SIC)
+        SIL1.Text="🕷️ Blocked: "..SPIDER.blocked.."  ·  ⚠️ Warned: "..SPIDER.warned
+        SIL1.Size=UDim2.new(1,-S(18),0,S(18)) SIL1.Position=UDim2.new(0,S(12),0,S(6))
+        SIL1.BackgroundTransparency=1 SIL1.TextColor3=T.Acc2 SIL1.Font=Enum.Font.GothamBold SIL1.TextSize=S(11) SIL1.TextXAlignment=Enum.TextXAlignment.Left
+        local SIL2=Instance.new("TextLabel",SIC)
+        SIL2.Text="Learning: "..(SPIDER.learning and "✅ YES" or "🚫 Done").."  ·  Scores: "..#(function() local c=0 for _ in pairs(SPIDER.scores) do c=c+1 end return setmetatable({},{__len=function() return c end}) end())
+        SIL2.Size=UDim2.new(1,-S(18),0,S(14)) SIL2.Position=UDim2.new(0,S(12),0,S(26))
+        SIL2.BackgroundTransparency=1 SIL2.TextColor3=T.Sub SIL2.Font=Enum.Font.Gotham SIL2.TextSize=S(10) SIL2.TextXAlignment=Enum.TextXAlignment.Left
+        local SIL3=Instance.new("TextLabel",SIC)
+        SIL3.Text="v2.0 · Spider v1 · AntiTP · AntiLag · "..(_S.rf and "FS✅" or "FS❌")
+        SIL3.Size=UDim2.new(1,-S(18),0,S(13)) SIL3.Position=UDim2.new(0,S(12),0,S(44))
+        SIL3.BackgroundTransparency=1 SIL3.TextColor3=T.Sub SIL3.Font=Enum.Font.Gotham SIL3.TextSize=S(9) SIL3.TextXAlignment=Enum.TextXAlignment.Left
+    end
+end
+
+SwitchTab("Combat")
+for _, tab in ipairs(TABS) do
+    TabBtns[tab.name].MouseButton1Click:Connect(function() SwitchTab(tab.name) end)
+    TabBtns[tab.name].TouchTap:Connect(function() SwitchTab(tab.name) end)
+end
+
+-- ── MINIMIZE ──────────────────────────────────────────────────────────────────
+local _minimized = false
+MinBtn.MouseButton1Click:Connect(function()
+    _minimized = not _minimized
+    local newSz = _minimized and UDim2.new(0,WW,0,S(62)) or UDim2.new(0,WW,0,WH)
+    Tw(Win,  {Size=newSz}, 0.32, Enum.EasingStyle.Back)
+    Tw(Clip, {Size=newSz}, 0.32, Enum.EasingStyle.Back)
+    TabBar.Visible = not _minimized
+    Scroll.Visible = not _minimized
+    MinBtn.Text = _minimized and "+" or "−"
+end)
+
+-- ── DRAG ──────────────────────────────────────────────────────────────────────
+local _dragStart, _winStart
+Head.InputBegan:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+        _dragStart = i.Position _winStart = Win.Position
+    end
+end)
+UIS.InputChanged:Connect(function(i)
+    if _dragStart and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then
+        local d = i.Position - _dragStart
+        Win.Position = UDim2.new(_winStart.X.Scale, _winStart.X.Offset+d.X, _winStart.Y.Scale, _winStart.Y.Offset+d.Y)
+    end
+end)
+UIS.InputEnded:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+        _dragStart = nil
+    end
+end)
+
+-- ── MOBILE BOTTOM BAR ─────────────────────────────────────────────────────────
+if IsMobile then
+    local vx2,_ = GetVP()
+    local BW2 = _mmin(S(368), vx2 - S(16))
+    local BBar = Instance.new("Frame", GUI)
+    BBar.Size = UDim2.new(0,BW2,0,S(60))
+    BBar.Position = UDim2.new(0.5,-BW2/2,1,-S(78))
+    BBar.BackgroundColor3 = T.Panel BBar.BorderSizePixel = 0
+    mkCorner(BBar, S(22))
+    local bbStk = mkStroke(BBar, T.Acc, 1.7)
+    addShimmer(bbStk, 0)
+    local BBL = Instance.new("UIListLayout",BBar)
+    BBL.FillDirection = Enum.FillDirection.Horizontal
+    BBL.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    BBL.VerticalAlignment = Enum.VerticalAlignment.Center
+    BBL.Padding = UDim.new(0,S(4))
+    mkPad(BBar, S(5),S(5),S(8),S(8))
+    local BTN2 = _mfloor((BW2 - S(50)) / 6)
+    local function MobBtn(txt, cb)
+        local B = Instance.new("TextButton",BBar)
+        B.Size = UDim2.new(0,BTN2,0,S(44))
+        B.BackgroundColor3 = T.Card B.Text = txt B.TextSize = S(9) B.Font = Enum.Font.GothamBold
+        B.TextColor3 = T.White B.BorderSizePixel = 0 B.AutoButtonColor = false
+        mkCorner(B, S(14))
+        local bs = mkStroke(B, T.Acc, 1)
+        addShimmer(bs, _mrnd()*0.5)
+        local function act()
+            Tw(B,{BackgroundColor3=T.Acc},0.08)
+            task.delay(0.18, function() Tw(B,{BackgroundColor3=T.Card},0.18) end)
+            pcall(cb)
+        end
+        B.TouchTap:Connect(act) B.MouseButton1Click:Connect(act)
+        return B
+    end
+    MobBtn("✈️Fly",function()
+        if not _flyActive then StartFly() else StopFly() end
+        Notify("✈️", _flyActive and "ON" or "OFF", T.Acc, 1.5)
+    end)
+    MobBtn("💨Spd",function()
+        Cfg.Speed.On = not Cfg.Speed.On ScheduleSave()
+        local h=Hum() if h then h.WalkSpeed=Cfg.Speed.On and Cfg.Speed.Value or 16 end
+        Notify("💨", Cfg.Speed.On and "ON" or "OFF", T.Acc, 1.5)
+    end)
+    MobBtn("🚀Jmp",function()
+        Cfg.InfJump.On = not Cfg.InfJump.On ScheduleSave()
+        Notify("🚀", Cfg.InfJump.On and "ON" or "OFF", T.Acc2, 1.5)
+    end)
+    MobBtn("🌿Clc",function()
+        Cfg.FastCollect.On = not Cfg.FastCollect.On ScheduleSave()
+        Notify("🌿", Cfg.FastCollect.On and "ON" or "OFF", T.Green, 1.5)
+    end)
+    MobBtn("💥Flg",function()
+        if not Cfg.Fling.On then Notify("💥","Включи в Combat!",T.Red,2) return end
+        local r = Root() if not r then return end
+        local near, best = nil, _mhuge
+        for _,p in pairs(Players:GetPlayers()) do
+            if p~=LP and p.Character then
+                local pr = p.Character:FindFirstChild("HumanoidRootPart")
+                if pr then
+                    local dd = (r.Position-pr.Position).Magnitude
+                    if dd<best and dd<Cfg.Fling.Range then best=dd near=pr end
+                end
+            end
+        end
+        if near then
+            local dir = (near.Position-r.Position).Unit
+            pcall(function()
+                near.Velocity = dir*Cfg.Fling.Power + Vector3.new(_mrnd(-50,50),Cfg.Fling.Power*0.6,_mrnd(-50,50))
+            end)
+        end
+    end)
+    MobBtn("🌐Hop",function()
+        Notify("🌐","Переход...",T.Acc2,2)
+        task.delay(1,function() pcall(function() TeleportService:Teleport(game.PlaceId,LP) end) end)
+    end)
+end
+
+-- ── KEYBOARD SHORTCUTS ────────────────────────────────────────────────────────
+UIS.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Enum.KeyCode.F then
+        if not _flyActive then StartFly() else StopFly() end
+        Notify("✈️ Fly", _flyActive and "Включён!" or "Выключен", T.Acc, 2)
+    end
+    if input.KeyCode == Enum.KeyCode.G and Cfg.Fling.On then
+        local r = Root() if not r then return end
+        local near, best = nil, _mhuge
+        for _,p in pairs(Players:GetPlayers()) do
+            if p~=LP and p.Character then
+                local pr = p.Character:FindFirstChild("HumanoidRootPart")
+                if pr then
+                    local dd = (r.Position-pr.Position).Magnitude
+                    if dd<best and dd<Cfg.Fling.Range then best=dd near=pr end
+                end
+            end
+        end
+        if near then
+            local dir = (near.Position-r.Position).Unit
+            pcall(function()
+                near.Velocity = dir*Cfg.Fling.Power + Vector3.new(_mrnd(-60,60),Cfg.Fling.Power*0.65,_mrnd(-60,60))
+            end)
+            Notify("💥 Fling!", near.Parent.Name, T.Red, 1.5)
+        end
+    end
+end)
+
+-- ── CHARACTER APPLY ───────────────────────────────────────────────────────────
+local function ApplyAll(char, isRespawn)
+    task.wait(0.7)
+    local h = char and char:FindFirstChildOfClass("Humanoid")
+    if not h then return end
+    if Cfg.Speed.On   then pcall(function() h.WalkSpeed = Cfg.Speed.Value end) end
+    if Cfg.InfJump.On then pcall(function() h.JumpPower = Cfg.InfJump.Power end) end
+    if Cfg.AntiRag.On then
+        for _,v in pairs(char:GetDescendants()) do
+            if v:IsA("BallSocketConstraint") or v:IsA("HingeConstraint") then
+                pcall(function() v.Enabled = false end)
+            end
+        end
+    end
+    if Cfg.AntiAC.On then StartAntiAC(h) end
+    if Cfg.AntiTP.On  then StartAntiTP() end
+    if Cfg.AntiLag.On then StartAntiLag() end
+    if _flyActive then StopFly() end
+    if isRespawn then
+        local feats = {}
+        if Cfg.Speed.On       then table.insert(feats,"💨"..Cfg.Speed.Value) end
+        if Cfg.InfJump.On     then table.insert(feats,"🚀") end
+        if Cfg.AntiRag.On     then table.insert(feats,"🛡️") end
+        if Cfg.AntiAC.On      then table.insert(feats,"🕷️") end
+        if Cfg.AntiTP.On      then table.insert(feats,"🚫") end
+        if Cfg.AntiLag.On     then table.insert(feats,"🧹") end
+        if Cfg.FastCollect.On then table.insert(feats,"🌿") end
+        if #feats>0 then Notify("🔄 Respawn",table.concat(feats," "),T.Acc,3) end
+    end
+end
+
+-- ── CACHED CHARACTER ──────────────────────────────────────────────────────────
+local _cChar, _cHum, _cRoot = nil, nil, nil
+local _cConstr = {}
+local _charDirty = true
+
+local function _refreshCache()
+    _cChar  = LP.Character
+    _cHum   = _cChar and _cChar:FindFirstChildOfClass("Humanoid")
+    _cRoot  = _cChar and _cChar:FindFirstChild("HumanoidRootPart")
+    _cConstr = {}
+    if _cChar then
+        for _,v in pairs(_cChar:GetDescendants()) do
+            if v:IsA("BallSocketConstraint") or v:IsA("HingeConstraint") then
+                table.insert(_cConstr,v)
+            end
+        end
+    end
+    _charDirty = false
+end
+
+LP.CharacterAdded:Connect(function(char)
+    _charDirty = true
+    StopAntiAC() StopAntiTP()
+    task.wait(0.7)
+    _refreshCache()
+    ApplyAll(char, true)
+end)
+if LP.Character then _refreshCache() ApplyAll(LP.Character, false) end
+
+-- ── MERGED HEARTBEAT ─────────────────────────────────────────────────────────
+local _hbFrame     = 0
+local _lastSpam    = 0
+local _lagRunning  = false
+local _rbFrame     = 0
+local _remCache    = {}
+local _remScan     = 0
+
+RunService.Heartbeat:Connect(function(dt)
+    _hbFrame = _hbFrame + 1
+    local now = tick()
+
+    if _charDirty then _refreshCache() end
+
+    if _saveT>0 and now-_saveT>1.5 then _saveT=0 SaveCfg(Cfg) end
+
+    if Cfg.Speed.On and _cHum then
+        if _cHum.WalkSpeed ~= Cfg.Speed.Value then
+            pcall(function() _cHum.WalkSpeed = Cfg.Speed.Value end)
+        end
+    end
+
+    if Cfg.AntiRag.On then
+        if _hbFrame % 180 == 0 then
+            _cConstr = {}
+            if _cChar then
+                for _,v in pairs(_cChar:GetDescendants()) do
+                    if v:IsA("BallSocketConstraint") or v:IsA("HingeConstraint") then
+                        table.insert(_cConstr,v)
+                    end
+                end
+            end
+        end
+        for _,v in pairs(_cConstr) do
+            if v and v.Parent then pcall(function() v.Enabled=false end) end
+        end
+    end
+
+    if Cfg.FastCollect.On then
+        if now - _cacheScan > _RESCAN_TIME then
+            _cacheScan = now _rebuildCache()
+        end
+        local interval = 0.05 + (Cfg.FastCollect.Rate-1)*(0.95/19)
+        if now - _lastCollect >= interval then
+            _lastCollect = now pcall(FireCollect)
+        end
+    end
+
+    if Cfg.Spam.On then
+        if now - _lastSpam >= Cfg.Spam.Delay/100 then
+            _lastSpam = now
+            if _cChar then
+                local tool = _cChar:FindFirstChildOfClass("Tool")
+                if tool then
+                    for _,v in pairs(tool:GetDescendants()) do
+                        if v:IsA("RemoteEvent") then pcall(function() v:FireServer(Mouse.Hit) end) end
+                    end
+                end
+            end
+            if _S.m1c then pcall(_S.m1c) end
+        end
+    end
+
+    if Cfg.ServLag.On then
+        if not _lagRunning then
+            _lagRunning = true
+            task.spawn(function()
+                local rCache = {} local rScan = 0
+                while Cfg.ServLag.On do
+                    local nt = tick()
+                    if nt - rScan > 5 then
+                        rScan = nt rCache = {}
+                        for _,v in pairs(game:GetDescendants()) do
+                            if v:IsA("RemoteEvent") then table.insert(rCache,v) end
+                        end
+                    end
+                    for _ = 1, Cfg.ServLag.Threads do
+                        task.spawn(function()
+                            for _,v in ipairs(rCache) do
+                                if Cfg.ServLag.On and v and v.Parent then
+                                    pcall(function() v:FireServer() end)
+                                end
+                            end
+                        end)
+                    end
+                    task.wait(0.05)
+                end
+                _lagRunning = false
+            end)
+        end
+    else
+        _lagRunning = false
+    end
+
+    if Cfg.AntiAC.On and _cHum then
+        local want = Cfg.Speed.On and Cfg.Speed.Value or 16
+        if _cHum.WalkSpeed ~= want then
+            pcall(function() _cHum.WalkSpeed = want end)
+        end
+    end
+
+    -- Shimmer update — every 3 frames, skip if minimized
+    _rbFrame = _rbFrame + 1
+    if _rbFrame % 3 == 0 and not _minimized then
+        local t = now
+        local slen = #_shimmers
+        for i = 1, slen do
+            local item = _shimmers[i]
+            if item.obj then
+                local st = item.obj
+                if st and st.Parent then
+                    local vv = 0.5 + 0.5 * _msin(t*1.35 + item.shift*6.2832)
+                    local lv = 0.16 + 0.80*vv
+                    pcall(function() st.Color = Color3.new(lv,lv,lv) end)
+                end
+            elseif item.grad then
+                local gr = item.grad
+                if gr and gr.Parent then
+                    local function bw(off)
+                        local vv = 0.5 + 0.5*_msin(t*1.35+(item.shift+off)*6.2832)
+                        local lv = 0.14 + 0.82*vv
+                        return Color3.new(lv,lv,lv)
+                    end
+                    pcall(function()
+                        gr.Color = ColorSequence.new{
+                            ColorSequenceKeypoint.new(0,   bw(0)),
+                            ColorSequenceKeypoint.new(0.5, bw(0.18)),
+                            ColorSequenceKeypoint.new(1,   bw(0.36)),
+                        }
+                    end)
+                end
+            end
+        end
+    end
+end)
+
+-- ── SHIFTLOCK + INF JUMP ──────────────────────────────────────────────────────
+RunService.RenderStepped:Connect(function()
+    local r = _cRoot local h = _cHum
+    if not (r and h) then return end
+    if Cfg.ShiftLock.On then
+        UIS.MouseBehavior = Enum.MouseBehavior.LockCenter
+        local lv = Camera.CFrame.LookVector
+        local xz = Vector3.new(lv.X,0,lv.Z)
+        if xz.Magnitude > 0.01 then
+            pcall(function() r.CFrame = r.CFrame:Lerp(CFrame.new(r.CFrame.Position, r.CFrame.Position+xz),0.6) end)
+        end
+        h.CameraOffset = h.CameraOffset:Lerp(Vector3.new(1.75,0,0),0.2)
+    else
+        if UIS.MouseBehavior == Enum.MouseBehavior.LockCenter then
+            UIS.MouseBehavior = Enum.MouseBehavior.Default
+        end
+        h.CameraOffset = h.CameraOffset:Lerp(Vector3.new(0,0,0),0.2)
+    end
+end)
+
+UIS.JumpRequest:Connect(function()
+    if not Cfg.InfJump.On then return end
+    local h = _cHum if not h then return end
+    pcall(function() h:ChangeState(Enum.HumanoidStateType.Jumping) end)
+    local r = _cRoot
+    if r then
+        local bv = Instance.new("BodyVelocity")
+        bv.Velocity = Vector3.new(r.Velocity.X, Cfg.InfJump.Power, r.Velocity.Z)
+        bv.MaxForce = Vector3.new(0,4e5,0) bv.P = 1e5 bv.Parent = r
+        Debris:AddItem(bv, 0.12)
+    end
+end)
+
+-- ── STARTUP ───────────────────────────────────────────────────────────────────
+task.delay(0.5,function()
+    Notify("🥟 Pelmen PVP","v2.0 · "..(IsMobile and "📱 Mobile" or "🖥️ PC").." · 🕷️Spider v1 · AntiTP · AntiLag",T.Acc,6)
+end)
+task.delay(1.5,function()
+    local on={}
+    if Cfg.Speed.On       then table.insert(on,"💨"..Cfg.Speed.Value) end
+    if Cfg.InfJump.On     then table.insert(on,"🚀") end
+    if Cfg.FastCollect.On then table.insert(on,"🌿") end
+    if Cfg.Spam.On        then table.insert(on,"⚡") end
+    if Cfg.AntiRag.On     then table.insert(on,"🛡️") end
+    if Cfg.AntiAC.On      then table.insert(on,"🕷️") end
+    if Cfg.AntiTP.On      then table.insert(on,"🚫") end
+    if Cfg.AntiLag.On     then table.insert(on,"🧹") end
+    if #on>0 then Notify("📂 CFG Loaded",table.concat(on," "),T.Yellow,5) end
+end)
+
+print("╔══════════════════════════════════════════════╗")
+print("║   🥟 PELMEN PVP  v2.0  by Pelmen            ║")
+print("║   🕷️ Spider v1  ·  AntiTP  ·  AntiLag      ║")
+print("║   "..(_mfloor(SW).."×".._mfloor(SH)).."  ·  "..(IsMobile and "📱 Mobile" or "🖥️ PC  ").."  ·  Delta/Arceus/Synapse  ║")
+print("╚══════════════════════════════════════════════╝")
